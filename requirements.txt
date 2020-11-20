@@ -2,3 +2,4 @@ transformers
 tokenizers
 fastai
 fastcore==1.0.0
+pandas

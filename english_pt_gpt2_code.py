@@ -230,7 +230,7 @@ def fine_tune(dataloader, model_en, data_path):
     learn.freeze()
     learn.lr_find()
     learn.fit_one_cycle(1, 2e-3)
-    learn.save(data_path/"GPT2_pt_1epoch_lr2e-3")
+    learn.save(data_path/"GPT2_es_1epoch_lr2e-3")
 
 
 def main():
