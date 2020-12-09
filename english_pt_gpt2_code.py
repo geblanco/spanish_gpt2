@@ -242,8 +242,8 @@ def main():
     model_en = GPT2LMHeadModel.from_pretrained("gpt2")
     setup_embeddings(data_path, model_en, tokenizer_fastai_en, tokenizer_fastai_es)
     dataloader = get_dataloader(wiki_csv_path, tokenizer_es)
-    print('Shoudl fine-tune')
-    # fine_tune(dataloader, model_en, data_path)
+    print('Should fine-tune')
+    fine_tune(dataloader, model_en, data_path)
 
 
 if __name__ == "__main__":
