@@ -4,8 +4,8 @@
 # ! wget https://raw.githubusercontent.com/piegu/fastai-projects/master/nlputils_fastai2.py -O /data/shared/virtualenvs/poesIA/lib/python3.8/site-packages/nlputils_fastai2.py
 import torch
 
-from fastai2.text.all import Config
-from fastai2.text.all import *
+from fastai.text.all import Config
+from fastai.text.all import *
 from nlputils_fastai2 import (
     get_wiki,
     split_wiki,
