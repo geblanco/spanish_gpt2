@@ -22,6 +22,7 @@ from transformers import (
     GPT2LMHeadModel,
     MarianMTModel,
     MarianTokenizer,
+    is_tf_available
 )
 
 gpu = 1
@@ -32,6 +33,13 @@ print(f"Cuda device: {torch.cuda.current_device()}")
 config = Config()
 lang = "es"
 EOF_TOKEN = "<|endoftext|>"
+
+if is_tf_available():
+    # Force no unnecessary allocation
+    import tensorflow as tf
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
 
 
 class TransformersTokenizer(Transform):
@@ -211,7 +219,7 @@ def get_dataloader(wiki_csv_path, tokenizer_es):
     # splits = [list(idxs_train), list(idxs_val)]
     # tls = TfmdLists(all_texts, TransformersTokenizer(tokenizer_es), splits=splits, dl_type=LMDataLoader)
 
-    bs, sl = 8,1024
+    bs, sl = 8, 1024
     dls = tls.dataloaders(bs=bs, seq_len=sl)
     return dls
 
