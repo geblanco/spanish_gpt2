@@ -5,9 +5,9 @@
 import torch
 import argparse
 
+from pathlib import Path
 from fastai.text.all import Config
 from fastai.text.all import *
-from fastai.distributed import DistributedDL
 from nlputils_fastai2 import (
     get_wiki,
     split_wiki,
@@ -27,6 +27,10 @@ from transformers import (
     is_tf_available
 )
 
+gpu = 1
+torch.cuda.set_device(gpu)
+print(f"Cuda device: {torch.cuda.current_device()}")
+
 # Get config of paths
 config = Config()
 lang = "es"
@@ -42,9 +46,11 @@ if is_tf_available():
 
 def parse_flags():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_rank", type=int, default=1)
-    args = parser.parse_args()
-    return args
+    parser.add_argument(
+        "-d", "--data_dir", type=str, required=True,
+        help="Data dir to store model data (model, tokenizer, vocab)"
+    )
+    return parser.parse_args()
 
 
 class TransformersTokenizer(Transform):
@@ -91,7 +97,7 @@ def splitter(model):
     return groups.map(params)
 
 
-def setup_wiki(data_path, lang, local_rank):
+def setup_wiki(data_path, lang):
     """
     If get_wiki fails, do:
     
@@ -104,48 +110,39 @@ def setup_wiki(data_path, lang, local_rank):
     """
     name = f"{lang}wiki"
     wiki_path = data_path/name
-    if local_rank not in [-1, 0]:
-        torch.distributed.barrier()
-    else:
-        wiki_path.mkdir(exist_ok=True, parents=True)
-        get_wiki(wiki_path, lang)
-        dest = split_wiki(wiki_path, lang)
-        dest = wiki_path/"docs"
-        # Size of downloaded data in the docs folder
-        num_files, num_tokens = get_num_tokens(dest)
-        print(f"{num_files} files - {num_tokens} tokens")
-        get_one_clean_file(dest, lang)
-        get_one_clean_csv_file(dest, lang)
-        torch.distributed.barrier()
-
+    wiki_path.mkdir(exist_ok=True, parents=True)
+    get_wiki(wiki_path, lang)
+    dest = split_wiki(wiki_path, lang)
+    dest = wiki_path/"docs"
+    # Size of downloaded data in the docs folder
+    num_files, num_tokens = get_num_tokens(dest)
+    print(f"{num_files} files - {num_tokens} tokens")
+    get_one_clean_file(dest, lang)
+    get_one_clean_csv_file(dest, lang)
     text_file_path = wiki_path/f"all_texts_{lang}wiki.txt"
     csv_file_path = wiki_path/f"all_texts_{lang}wiki.csv"
     return text_file_path, csv_file_path
 
 
-def train_tokenizer(data_path, wiki_text_file_path, local_rank):
+def train_tokenizer(data_path, wiki_text_file_path):
     # ToDo := Load if weights exists, else setup
     tokenizer_en = GPT2TokenizerFast.from_pretrained("gpt2")
     tokenizer_en.pad_token = tokenizer_en.eos_token
-    tokenizer_es_path = data_path/"BLBPE_tokenizer_es"
     vocab_size = tokenizer_en.vocab_size
     max_length = 1024
 
-    if local_rank not in [-1, 0]:
-        torch.distributed.barrier()
-    else:
-        tokenizer_es = ByteLevelBPETokenizer()
-        tokenizer_es.train(
-            files=[str(wiki_text_file_path)],
-            vocab_size=vocab_size,
-            min_frequency=2,
-            special_tokens=[EOF_TOKEN]
-        )
-        tokenizer_es.enable_truncation(max_length=max_length)
+    tokenizer_es = ByteLevelBPETokenizer()
+    tokenizer_es.train(
+        files=[str(wiki_text_file_path)],
+        vocab_size=vocab_size,
+        min_frequency=2,
+        special_tokens=[EOF_TOKEN]
+    )
+    tokenizer_es.enable_truncation(max_length=max_length)
 
-        tokenizer_es_path.mkdir(exist_ok=True, parents=True)
-        tokenizer_es.save_model(str(tokenizer_es_path))
-        torch.distributed.barrier()
+    tokenizer_es_path = data_path/"BLBPE_tokenizer_es"
+    tokenizer_es_path.mkdir(exist_ok=True, parents=True)
+    tokenizer_es.save_model(str(tokenizer_es_path))
 
     tokenizer_es = GPT2TokenizerFast.from_pretrained(
         str(tokenizer_es_path), pad_token=EOF_TOKEN
@@ -207,7 +204,7 @@ def setup_embeddings(data_path, model_en, tokenizer_en, tokenizer_es):
     torch.save(different_tokens_list, data_path/"different_tokens_list.pt")
 
 
-def get_dataloader(wiki_csv_path, tokenizer_es, world_size=2):
+def get_dataloader(wiki_csv_path, tokenizer_es):
     # ToDo := save/load instead of preprocess al the time
     df = pd.read_csv(wiki_csv_path)
     # ToDo := Work only over a small subset? (1000)
@@ -233,15 +230,12 @@ def get_dataloader(wiki_csv_path, tokenizer_es, world_size=2):
     # splits = [list(idxs_train), list(idxs_val)]
     # tls = TfmdLists(all_texts, TransformersTokenizer(tokenizer_es), splits=splits, dl_type=LMDataLoader)
 
-    bs, sl = 8, 1024
-    dls = []
-    # dls = tls.dataloaders(bs=bs, seq_len=sl)
-    for i in range(world_size):
-        dls.append(DistributedDL(tls.dataloaders(bs=bs, seq_len=sl), i, world_size))
+    bs, sl = 2, 512
+    dls = tls.dataloaders(bs=bs, seq_len=sl)
     return dls
 
 
-def fine_tune(args, dataloader, model_en, data_path):
+def fine_tune(dataloader, model_en, data_path):
     learn = Learner(
         dataloader,
         model_en,
@@ -249,7 +243,7 @@ def fine_tune(args, dataloader, model_en, data_path):
         splitter=splitter,
         cbs=[DropOutput],
         metrics=[accuracy, Perplexity()]
-    ).to_fp16().to_distributed(args.local_rank)
+    ).to_fp16()
 
     learn.validate()
     learn.freeze()
@@ -258,22 +252,33 @@ def fine_tune(args, dataloader, model_en, data_path):
     learn.save(data_path/"GPT2_es_1epoch_lr2e-3")
 
 
-def main(args):
-    torch.cuda.set_device(args.local_rank)
-    torch.distributed.init_process_group(backend='nccl', init_method='env://')
+def setup_data_dir(data_dir):
+    data_dir = Path(data_dir)
+    data_dir.mkdir(exist_ok=True, parents=True)
+    return str(data_dir)
 
+
+def save_data(model_en, tokenizer_es, data_path):
+    model_path = data_path.joinpath("gpt2_es")
+    model_path.mkdir(exist_ok=True, parents=True)
+    model_en.save_pretrained(str(model_path))
+    tokenizer_es.save_pretrained(str(model_path))
+
+
+def main(data_dir):
     data_path = config["data_path"]
-    wiki_text_path, wiki_csv_path = setup_wiki(data_path, lang, args.local_rank)
-    tokenizer_en, tokenizer_es = train_tokenizer(data_path, wiki_text_path, args.local_rank)
+    wiki_text_path, wiki_csv_path = setup_wiki(data_path, lang)
+    tokenizer_en, tokenizer_es = train_tokenizer(data_path, wiki_text_path)
     tokenizer_fastai_en = get_fastai_tokenizer(tokenizer_en)
     tokenizer_fastai_es = get_fastai_tokenizer(tokenizer_es)
     model_en = GPT2LMHeadModel.from_pretrained("gpt2")
     setup_embeddings(data_path, model_en, tokenizer_fastai_en, tokenizer_fastai_es)
     dataloader = get_dataloader(wiki_csv_path, tokenizer_es)
     print('Should fine-tune')
-    fine_tune(args, dataloader, model_en, data_path)
+    # pass data_dir, user defined store directory
+    fine_tune(dataloader, model_en, data_path)
+    save_data(model_en, tokenizer_es, Path(data_dir))
 
 
 if __name__ == "__main__":
-    args = parse_flags()
-    main(args)
+    main(**vars(parse_flags()))
