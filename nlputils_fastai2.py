@@ -23,7 +23,7 @@ def get_wiki(path,lang):
 
     # Change working directory to `path`
     prev_cwd = Path.cwd()
-    os.chdir(path/"wikiextractor")
+    os.chdir(path)
     
     # Get wikiextractor
     if not (path/'wikiextractor').exists():
@@ -53,7 +53,6 @@ def split_wiki(path,lang):
     f=None
 
     for i,l in enumerate(lines):
-        if i%100000 == 0: print(i)
         if l.startswith('<doc id="'):
             title = title_re.findall(l)[0].replace('/','_')
             if len(title)>150: continue
@@ -64,7 +63,6 @@ def split_wiki(path,lang):
     return dest
 
 def clean_files(dest):
-
     doc_re = re.compile(rf'([\w\W]*)<\/doc>') # delete </doc>
     
     for i,l in enumerate(dest.ls()):
@@ -82,7 +80,6 @@ def clean_files(dest):
         f.close()
         
 def get_one_clean_file(dest,lang):
-
     fname = f'all_texts_{lang}wiki.txt'
     doc_re = re.compile(rf'([\w\W]*)<\/doc>') # delete </doc>
     
@@ -98,14 +95,12 @@ def get_one_clean_file(dest,lang):
         # concatenate text
         all_texts += text
         all_texts += "\n"
-        if not (i % 1000): print(i)
   
     with open (dest.parent/fname, 'w') as fp: 
         fp.write(all_texts)
     print(f"all texts from wikipedia {lang} in the file {dest.parent/fname}\n")
 
 def get_one_clean_csv_file(dest,lang):    
-                         
     fname = f'all_texts_{lang}wiki.csv'
     doc_re = re.compile(rf'([\w\W]*)<\/doc>') # delete </doc>
     
@@ -129,7 +124,6 @@ def get_one_clean_csv_file(dest,lang):
     print(f"all texts from wikipedia {lang} in the file {dest.parent/fname}\n")
                          
 def get_num_tokens(dest):
-    
     # Getting an idea of the number of words
     files = dest.ls()
     num_tokens = 0

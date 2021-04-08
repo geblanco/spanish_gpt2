@@ -4,10 +4,30 @@
 # ! wget https://raw.githubusercontent.com/piegu/fastai-projects/master/nlputils_fastai2.py -O /data/shared/virtualenvs/poesIA/lib/python3.8/site-packages/nlputils_fastai2.py
 import torch
 import argparse
+import pandas as pd
+import numpy as np
 
 from pathlib import Path
 from fastai.text.all import Config
-from fastai.text.all import *
+from fastai.learner import Recorder
+from fastai.callback.core import TrainEvalCallback
+from fastai.callback.tracker import SaveModelCallback
+from fastai.callback.progress import ProgressCallback, ShowGraphCallback
+from fastai.text.all import (
+    L,
+    nn,
+    params,
+    tensor,
+    Learner,
+    Callback,
+    accuracy,
+    Transform,
+    TitledStr,
+    TfmdLists,
+    Perplexity,
+    LMDataLoader,
+    CrossEntropyLossFlat,
+)
 from nlputils_fastai2 import (
     get_wiki,
     split_wiki,
@@ -204,31 +224,30 @@ def setup_embeddings(data_path, model_en, tokenizer_en, tokenizer_es):
     torch.save(different_tokens_list, data_path/"different_tokens_list.pt")
 
 
-def get_dataloader(wiki_csv_path, tokenizer_es):
-    # ToDo := save/load instead of preprocess al the time
+def get_dataloader(wiki_csv_path, tokenizer_es, data_dir):
+    idxs_train_path = data_dir.joinpath("train.idxs")
+    idxs_val_path = data_dir.joinpath("val.idxs")
     df = pd.read_csv(wiki_csv_path)
     # ToDo := Work only over a small subset? (1000)
+    # df_sample = df
     df_sample = df[:1000]
+    if idxs_train_path.exists() and idxs_val_path.exists():
+        idxs_train = torch.load(idxs_train_path)
+        idxs_val = torch.load(idxs_val_path)
+    else:
+        num = int(0.8*len(df_sample))
 
-    num = int(0.8*len(df_sample))
-
-    # ToDo := save data
-    idxs = np.random.randint(0, len(df_sample), len(df_sample))
-    idxs_train = idxs[:num]
-    idxs_val = idxs[num:]
+        # ToDo := save data
+        idxs = np.random.randint(0, len(df_sample), len(df_sample))
+        idxs_train = idxs[:num]
+        idxs_val = idxs[num:]
+        torch.save(idxs_train, idxs_train_path)
+        torch.save(idxs_val, idxs_val_path)
 
     all_texts = np.concatenate([df_sample.iloc[idxs_train].text.values, df_sample.iloc[idxs_val].text.values])
 
     splits = [list(idxs_train), list(idxs_val)]
     tls = TfmdLists(all_texts, TransformersTokenizer(tokenizer_es), splits=splits, dl_type=LMDataLoader)
-
-    # ToDo get data if already saved
-    # idxs_train = torch.load(path_data/'idxs_train.pt')
-    # idxs_val = torch.load(path_data/'idxs_val.pt')
-
-    # all_texts = np.concatenate([df.iloc[idxs_train].text.values, df.iloc[idxs_val].text.values])
-    # splits = [list(idxs_train), list(idxs_val)]
-    # tls = TfmdLists(all_texts, TransformersTokenizer(tokenizer_es), splits=splits, dl_type=LMDataLoader)
 
     bs, sl = 2, 512
     dls = tls.dataloaders(bs=bs, seq_len=sl)
@@ -236,19 +255,32 @@ def get_dataloader(wiki_csv_path, tokenizer_es):
 
 
 def fine_tune(dataloader, model_en, data_path):
+    cbs = [
+        DropOutput(),
+        Recorder(),
+        TrainEvalCallback(),
+        ProgressCallback(),
+        SaveModelCallback(),
+    ]
     learn = Learner(
         dataloader,
         model_en,
         loss_func=CrossEntropyLossFlat(),
         splitter=splitter,
-        cbs=[DropOutput],
+        cbs=cbs,
         metrics=[accuracy, Perplexity()]
     ).to_fp16()
+
+    from IPython import embed
+    embed()
+
 
     learn.validate()
     learn.freeze()
     learn.lr_find()
     learn.fit_one_cycle(1, 2e-3)
+    # ToDo := Check train epochs and one cycle training
+    # learn.fit(3, 2e-3)
     learn.save(data_path/"GPT2_es_1epoch_lr2e-3")
 
 
@@ -273,11 +305,12 @@ def main(data_dir):
     tokenizer_fastai_es = get_fastai_tokenizer(tokenizer_es)
     model_en = GPT2LMHeadModel.from_pretrained("gpt2")
     setup_embeddings(data_path, model_en, tokenizer_fastai_en, tokenizer_fastai_es)
-    dataloader = get_dataloader(wiki_csv_path, tokenizer_es)
+    data_dir = Path(data_dir)
+    dataloader = get_dataloader(wiki_csv_path, tokenizer_es, data_dir)
     print('Should fine-tune')
     # pass data_dir, user defined store directory
     fine_tune(dataloader, model_en, data_path)
-    save_data(model_en, tokenizer_es, Path(data_dir))
+    save_data(model_en, tokenizer_es, data_dir)
 
 
 if __name__ == "__main__":
