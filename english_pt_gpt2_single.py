@@ -271,10 +271,6 @@ def fine_tune(dataloader, model_en, data_path):
         metrics=[accuracy, Perplexity()]
     ).to_fp16()
 
-    from IPython import embed
-    embed()
-
-
     learn.validate()
     learn.freeze()
     learn.lr_find()
